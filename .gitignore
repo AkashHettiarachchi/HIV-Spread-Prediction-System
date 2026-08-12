@@ -1,0 +1,2 @@
+# Ignore large downloaded archive bundles in RealData
+RealData/*.zip

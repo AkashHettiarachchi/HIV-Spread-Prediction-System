@@ -1,0 +1,9 @@
+numpy
+scipy
+pandas
+matplotlib
+plotly
+streamlit
+tensorflow>=2.15
+scikit-learn
+reportlab
