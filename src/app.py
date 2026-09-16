@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import streamlit as st
 import numpy as np
 import pandas as pd
@@ -6,23 +8,47 @@ import plotly.graph_objects as go
 from quarterly_data import get_quarterly_dataframe
 from calibration_quarterly import calibrate_quarterly, sica_quarterly_predictions
 from hybrid_pipeline_quarterly import run as run_hybrid_pipeline
-from forecast_future import forecast_future
+from sidebar import render_sidebar
 
-st.set_page_config(page_title="HIV Forecasting Dashboard - Sri Lanka", layout="wide", page_icon="🦠")
+st.set_page_config(
+    page_title="Preditca | AI HIV Analytics",
+    layout="wide",
+    page_icon=str(Path(__file__).parent / "assets" / "LOGO4.png"),
+)
 
 st.markdown("""
     <style>
-    .main { background-color: #0E1117; }
-    .stMetric { background-color: #1E222D; padding: 15px; border-radius: 10px; border: 1px solid #2E3340; }
-    div[data-testid="stSidebar"] { background-color: #161922; }
+    @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+    :root { --ink: #080a0c; --line: #26302d; --muted: #8c9a95; --green: #75f0a8; }
+    html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; }
+    .stApp { background: radial-gradient(circle at 70% -10%, #163329 0%, var(--ink) 34%); color: #edf4f0; }
+    .main .block-container { max-width: 1440px; padding: 2.5rem 4rem 4rem; }
+    h1, h2, h3 { font-family: 'Space Grotesk', sans-serif; letter-spacing: -.02em; }
+    h1 { font-size: clamp(2rem, 4vw, 3.3rem) !important; line-height: 1.05 !important; margin-bottom: .35rem !important; }
+    h2 { font-size: 1.25rem !important; margin-top: 1.6rem !important; }
+    .eyebrow, .section-kicker { color: var(--green); font-size: .68rem; font-weight: 700; letter-spacing: .15em; text-transform: uppercase; }
+    .eyebrow { margin-bottom: .7rem; }
+    .section-kicker { margin-top: 2rem; }
+    .hero-copy { color: var(--muted); max-width: 740px; line-height: 1.6; }
+    .stAlert { background: #12231b; border: 1px solid #285e43; color: #cdebd9; border-radius: 12px; }
+    div[data-testid="stMetric"] { background: linear-gradient(145deg, #151c1b, #0f1414); border: 1px solid var(--line); border-radius: 14px; padding: 1.1rem 1.2rem; box-shadow: 0 12px 28px rgba(0,0,0,.18); }
+    div[data-testid="stMetricLabel"] { color: var(--muted); font-size: .74rem; }
+    div[data-testid="stMetricValue"] { color: #f4faf7; }
+    div[data-testid="stMetricDelta"] { color: var(--green); }
+    .insight { background: #101716; border: 1px solid var(--line); border-left: 3px solid var(--green); border-radius: 0 12px 12px 0; padding: .85rem 1rem; color: #aabbb4; font-size: .86rem; line-height: 1.55; }
+    div[data-testid="stExpander"] { margin-top: 10px; }
+    .stDataFrame { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+    .stButton button, .stDownloadButton button { border-radius: 9px; transition: transform .18s ease, box-shadow .18s ease; }
+    .stButton button:hover, .stDownloadButton button:hover { transform: translateY(-1px); box-shadow: 0 8px 20px rgba(117,240,168,.16); }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🦠 HIV/AIDS Epidemic Forecasting - Sri Lanka")
-st.caption("Hybrid Mechanistic-Deep Learning Architecture: SICA Mathematical Framework "
-           "+ Bi-LSTM residual correction, trained on real NSACP quarterly surveillance data "
-           "(2016 Q1 - 2025 Q3, 39 quarters)")
-st.markdown("---")
+render_sidebar("overview")
+
+st.markdown('<div class="eyebrow">PCA / Overview</div>', unsafe_allow_html=True)
+st.title("HIV intelligence, made legible.")
+st.markdown('<div class="hero-copy">A transparent view of Sri Lanka\'s quarterly HIV surveillance signal, combining a calibrated SICA baseline with residual deep-learning correction.</div>', unsafe_allow_html=True)
+st.markdown('<div style="height: 1.3rem"></div>', unsafe_allow_html=True)
 
 st.info(
     "**Data status:** All figures below use real, primary-source NSACP quarterly surveillance "
@@ -54,6 +80,8 @@ def compute_metrics(y_true, y_pred):
 sica_mae, sica_rmse, sica_mape = compute_metrics(real_test, sica_test)
 hybrid_mae, hybrid_rmse, hybrid_mape = compute_metrics(real_test, hybrid_test)
 
+st.markdown('<div class="section-kicker">Signal health</div>', unsafe_allow_html=True)
+st.subheader("Model performance at a glance")
 # ----------------- Metrics row -----------------
 col1, col2, col3, col4 = st.columns(4)
 with col1:
@@ -66,17 +94,18 @@ with col4:
     st.metric("Hybrid test MAPE", f"{hybrid_mape:.2f}%",
               delta=f"{hybrid_mape - sica_mape:+.2f}pp vs SICA-only", delta_color="inverse")
 
+st.markdown('<div class="insight">Validation note: the hybrid residual correction does not clearly outperform the pure SICA baseline on the real held-out window. The result is reported as observed, with no synthetic values or post-hoc adjustment.</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-kicker">Observed signal</div>', unsafe_allow_html=True)
+st.subheader("Historical incidence and model fit")
 st.caption(
     "Note: on this real held-out test, the Bi-LSTM residual correction does **not** clearly "
     "outperform the pure SICA baseline -- this is an honest reported result, not an error. "
-    "With ~28 training sequences, the Bi-LSTM has limited data to learn from. See README for discussion."
+    "See README for discussion of the validation result and model limitations."
 )
 
 st.markdown("<br>", unsafe_allow_html=True)
 
 # ----------------- Main chart -----------------
-st.subheader("📊 Real Data vs. SICA Baseline vs. Hybrid Forecast")
-
 quarters_x = [f"{int(r.year)} Q{int(r.quarter)}" for _, r in df.iterrows()]
 
 fig = go.Figure()
@@ -96,16 +125,17 @@ fig.add_vline(x=n_train - 0.5, line_dash="dot", line_color="#E91E63",
               annotation_text="train / test split", annotation_position="top")
 
 fig.update_layout(
-    template="plotly_dark", paper_bgcolor="#161922", plot_bgcolor="#161922",
+    template="plotly_dark", paper_bgcolor="#111817", plot_bgcolor="#111817",
     margin=dict(l=20, r=20, t=30, b=20), height=500, hovermode="x unified",
     legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    xaxis=dict(title="Quarter", gridcolor="#2E3340", tickangle=-45),
-    yaxis=dict(title="New HIV Cases per Quarter", gridcolor="#2E3340"),
+    xaxis=dict(title="Quarter", gridcolor="#26302d", tickangle=-45, zeroline=False),
+    yaxis=dict(title="New HIV Cases per Quarter", gridcolor="#26302d", zeroline=False),
 )
 st.plotly_chart(fig, width='stretch')
 
 # ----------------- Test set table -----------------
-st.subheader("🔬 Held-Out Test Quarters (real data, never used in training)")
+st.markdown('<div class="section-kicker">Validation window</div>', unsafe_allow_html=True)
+st.subheader("Held-out quarters")
 test_df = df.iloc[n_train:][["year", "quarter"]].copy()
 test_df["Real"] = real_test
 test_df["SICA-only"] = np.round(sica_test, 1)
@@ -114,14 +144,12 @@ st.dataframe(test_df, width='stretch')
 
 col_a, col_b = st.columns(2)
 with col_a:
-    st.markdown("**SICA-only baseline**")
-    st.write(f"MAE: {sica_mae:.2f} | RMSE: {sica_rmse:.2f} | MAPE: {sica_mape:.2f}%")
+    st.markdown('<div class="insight"><strong>SICA-only baseline</strong><br>MAE: {:.2f} &nbsp;|&nbsp; RMSE: {:.2f} &nbsp;|&nbsp; MAPE: {:.2f}%</div>'.format(sica_mae, sica_rmse, sica_mape), unsafe_allow_html=True)
 with col_b:
-    st.markdown("**Hybrid SICA + Bi-LSTM**")
-    st.write(f"MAE: {hybrid_mae:.2f} | RMSE: {hybrid_rmse:.2f} | MAPE: {hybrid_mape:.2f}%")
+    st.markdown('<div class="insight"><strong>Hybrid SICA + Bi-LSTM</strong><br>MAE: {:.2f} &nbsp;|&nbsp; RMSE: {:.2f} &nbsp;|&nbsp; MAPE: {:.2f}%</div>'.format(hybrid_mae, hybrid_rmse, hybrid_mape), unsafe_allow_html=True)
 
 # ----------------- Calibrated parameters -----------------
-with st.expander("📐 Calibrated SICA Parameters"):
+with st.expander("Model parameters and limitations"):
     st.write(f"β (transmission rate): **{calibrated_params.beta:.5f}**")
     st.write(f"ρ (diagnosis / ART linkage rate): **{calibrated_params.rho:.5f}**")
     st.write(f"α (ART failure / progression rate): **{calibrated_params.alpha:.5f}**")
@@ -134,100 +162,5 @@ with st.expander("📐 Calibrated SICA Parameters"):
 
 st.caption(
     "Data source: National STD/AIDS Control Programme (NSACP), Ministry of Health, Sri Lanka -- "
-    "quarterly surveillance update reports, 2016 Q1 to 2025 Q3."
-)
-
-# ----------------- FUTURE FORECAST: 2026-2030 -----------------
-st.markdown("---")
-st.subheader("🔮 Forecast: 2026 Q1 - 2030 Q4")
-st.caption(
-    "This is the actual research deliverable -- genuine forecasts beyond the last real data "
-    "point (2025 Q3), produced by retraining the hybrid model on ALL 71 real quarters "
-    "(not held-out validation, which is shown above). Future Bi-LSTM residuals are generated "
-    "autoregressively: each quarter's prediction feeds into the input window for the next. "
-    "Forecasts further into the future carry more uncertainty than near-term ones."
-)
-
-with st.spinner("Generating 2026-2030 forecast (retraining on full dataset)..."):
-    future_results = forecast_future(n_future_quarters=20)
-
-future_labels_x = [f"{yr} Q{q}" for yr, q in future_results["future_labels"]]
-hist_labels_x = [f"{int(r.year)} Q{int(r.quarter)}" for _, r in df.iterrows()]
-
-fig_future = go.Figure()
-fig_future.add_trace(go.Scatter(
-    x=hist_labels_x, y=future_results["real_historical"], mode="lines", name="Real (2008-2025)",
-    line=dict(color="#8A99AD", width=1.5),
-))
-fig_future.add_trace(go.Scatter(
-    x=future_labels_x, y=future_results["hybrid_future"], mode="lines+markers",
-    name="Hybrid forecast (2026-2030)",
-    line=dict(color="#00E676", width=3), marker=dict(size=6, color="#00E676"),
-))
-fig_future.add_trace(go.Scatter(
-    x=future_labels_x, y=future_results["sica_future"], mode="lines", name="SICA-only (2026-2030)",
-    line=dict(color="#FFA500", width=2, dash="dot"),
-))
-fig_future.add_vline(x=len(hist_labels_x) - 0.5, line_dash="dot", line_color="#E91E63",
-                      annotation_text="last real data (2025 Q3)", annotation_position="top")
-fig_future.update_layout(
-    template="plotly_dark", paper_bgcolor="#161922", plot_bgcolor="#161922",
-    margin=dict(l=20, r=20, t=30, b=20), height=480, hovermode="x unified",
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    xaxis=dict(title="Quarter", gridcolor="#2E3340", tickangle=-45,
-               tickmode="array",
-               tickvals=list(range(0, len(hist_labels_x) + len(future_labels_x), 4)),
-               ticktext=(hist_labels_x + future_labels_x)[::4]),
-    yaxis=dict(title="New HIV Cases per Quarter", gridcolor="#2E3340"),
-)
-st.plotly_chart(fig_future, width='stretch')
-
-future_df = pd.DataFrame({
-    "Year": [yr for yr, q in future_results["future_labels"]],
-    "Quarter": [q for yr, q in future_results["future_labels"]],
-    "SICA-only": np.round(future_results["sica_future"], 1),
-    "Hybrid forecast": np.round(future_results["hybrid_future"], 1),
-})
-st.dataframe(future_df, width='stretch')
-
-annual_forecast = future_df.groupby("Year")["Hybrid forecast"].sum().round(0)
-st.markdown("**Annual forecast totals (hybrid model):**")
-
-from report_generator import build_forecast_pdf
-
-last_row = df.iloc[-1]
-ann_cols = st.columns(len(annual_forecast))
-for col, (yr, total) in zip(ann_cols, annual_forecast.items()):
-    with col:
-        st.metric(str(yr), f"{int(total)} cases")
-        year_pdf_bytes = build_forecast_pdf(
-            future_results,
-            last_real_year=last_row["year"],
-            last_real_quarter=last_row["quarter"],
-            last_real_value=real_values[-1],
-            year_filter=int(yr),
-        )
-        st.download_button(
-            label="📄 PDF",
-            data=year_pdf_bytes,
-            file_name=f"HIV_Forecast_Report_{int(yr)}.pdf",
-            mime="application/pdf",
-            key=f"download_{yr}",
-            width='stretch',
-        )
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-# ---- Full 2026-2030 report (all years combined) ----
-full_pdf_bytes = build_forecast_pdf(
-    future_results,
-    last_real_year=last_row["year"],
-    last_real_quarter=last_row["quarter"],
-    last_real_value=real_values[-1],
-)
-st.download_button(
-    label="📄 Download Full Report (2026-2030, PDF)",
-    data=full_pdf_bytes,
-    file_name="HIV_Forecast_Report_2026-2030.pdf",
-    mime="application/pdf",
+    "quarterly surveillance update reports, 2008 Q1 to 2025 Q3."
 )

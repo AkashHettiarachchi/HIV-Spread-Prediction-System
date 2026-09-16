@@ -4,6 +4,7 @@ pandas
 matplotlib
 plotly
 streamlit
+google-genai
 tensorflow>=2.15
 scikit-learn
 reportlab
