@@ -46,6 +46,16 @@ st.markdown("""
 
 render_sidebar("overview")
 
+df = get_quarterly_dataframe()
+real_values = df["new_cases"].values.astype(float)
+total_quarters = len(df)
+first_period = f"{int(df.iloc[0]['year'])} Q{int(df.iloc[0]['quarter'])}"
+last_period = f"{int(df.iloc[-1]['year'])} Q{int(df.iloc[-1]['quarter'])}"
+n_test = 7
+n_train = total_quarters - n_test
+test_start_period = f"{int(df.iloc[-n_test]['year'])} Q{int(df.iloc[-n_test]['quarter'])}"
+test_end_period = last_period
+
 st.markdown('<div class="eyebrow">PCA / Overview</div>', unsafe_allow_html=True)
 st.title("HIV intelligence, made legible.")
 st.markdown('<div class="hero-copy">A transparent view of Sri Lanka\'s quarterly HIV surveillance signal, combining a calibrated SICA baseline with residual deep-learning correction.</div>', unsafe_allow_html=True)
@@ -55,16 +65,11 @@ st.info(
     "**Data status:** All figures below use real, primary-source NSACP quarterly surveillance "
     "reports -- no synthetic or hardcoded values anywhere on this page. The SICA model is "
     "calibrated on this data; the Bi-LSTM residual-correction model is trained on the first "
-    "~32 quarters and evaluated on the most recent 7 quarters (2024 Q1 - 2025 Q3), which the "
-    "model never saw during training."
+    f"{n_train} quarters and evaluated on the most recent {n_test} quarters "
+    f"({test_start_period} - {test_end_period}), which the model never saw during training."
 )
 
-df = get_quarterly_dataframe()
-real_values = df["new_cases"].values.astype(float)
-
 with st.spinner("Calibrating SICA model and training Bi-LSTM on real quarterly data..."):
-    n_test = 7
-    n_train = len(real_values) - n_test
     train_values = real_values[:n_train]
     calibrated_params, y0, calib_result, _, _ = calibrate_quarterly(train_values=train_values)
     sica_baseline_full = sica_quarterly_predictions(calibrated_params, y0, n_quarters=len(real_values))
@@ -89,9 +94,9 @@ st.subheader("Model performance at a glance")
 # ----------------- Metrics row -----------------
 col1, col2, col3, col4 = st.columns(4)
 with col1:
-    st.metric("Real quarters used", f"{len(real_values)}", help="2016 Q1 - 2025 Q3, NSACP reports")
+    st.metric("Real quarters used", f"{total_quarters}", help=f"{first_period} - {last_period}, NSACP reports")
 with col2:
-    st.metric("Held-out test quarters", f"{len(real_test)}", help="2024 Q1 - 2025 Q3, never seen in training")
+    st.metric("Held-out test quarters", f"{len(real_test)}", help=f"{test_start_period} - {test_end_period}, never seen in training")
 with col3:
     st.metric("SICA-only test MAPE", f"{sica_mape:.2f}%")
 with col4:
@@ -228,16 +233,22 @@ with st.expander("🔬 Mechanistic Model Sensitivity & XAI Analysis", expanded=F
         x=quarters_x, y=np.zeros(len(residuals)), mode="lines", name="Zero error",
         line=dict(color="#D5DED9", width=1),
     ))
-    residual_fig.add_vrect(
-        x0="2020 Q1", x1="2021 Q4", fillcolor="#FF6B6B", opacity=0.12,
-        line_width=0, annotation_text="COVID-19 testing disruptions",
-        annotation_position="top left",
-    )
-    residual_fig.add_vrect(
-        x0="2022 Q2", x1="2025 Q3", fillcolor="#00E676", opacity=0.10,
-        line_width=0, annotation_text="Expanded MSM testing / accelerated detection",
-        annotation_position="bottom right",
-    )
+    covid_labels = [label for label in quarters_x if "2020 Q" in label or "2021 Q" in label]
+    post_pandemic_labels = [label for label in quarters_x if label >= "2022 Q2"]
+    if covid_labels:
+        residual_fig.add_vrect(
+            x0=covid_labels[0], x1=covid_labels[-1], fillcolor="#FF6B6B", opacity=0.12,
+            line_width=0,
+            annotation_text=f"COVID-19 testing disruptions ({covid_labels[0]} - {covid_labels[-1]})",
+            annotation_position="top left",
+        )
+    if post_pandemic_labels:
+        residual_fig.add_vrect(
+            x0=post_pandemic_labels[0], x1=post_pandemic_labels[-1], fillcolor="#00E676", opacity=0.10,
+            line_width=0,
+            annotation_text=f"Expanded MSM testing / accelerated detection ({post_pandemic_labels[0]} - {post_pandemic_labels[-1]})",
+            annotation_position="bottom right",
+        )
     residual_fig.update_layout(
         template="plotly_dark", paper_bgcolor="#111817", plot_bgcolor="#111817",
         margin=dict(l=20, r=20, t=55, b=20), height=420, hovermode="x unified",
@@ -250,9 +261,9 @@ with st.expander("🔬 Mechanistic Model Sensitivity & XAI Analysis", expanded=F
         '<div class="insight"><strong>Why the Bi-LSTM residual correction is needed:</strong> '
         "SICA encodes a smooth mechanistic transmission and care-flow process, but it does not "
         "observe abrupt changes in testing access, reporting intensity, service disruption, or "
-        "case-finding strategy. Negative residuals during 2020 Q1–2021 Q4 are consistent with "
+        f"case-finding strategy. Negative residuals during {covid_labels[0] if covid_labels else 'the disruption period'} - {covid_labels[-1] if covid_labels else 'the disruption period'} are consistent with "
         "COVID-19 testing disruptions and under-reporting, while the sustained positive shift from "
-        "2022 Q2–2025 Q3 is consistent with expanded MSM testing and accelerated detection. The "
+        f"{post_pandemic_labels[0] if post_pandemic_labels else 'the post-pandemic period'} - {post_pandemic_labels[-1] if post_pandemic_labels else 'the available endpoint'} is consistent with expanded MSM testing and accelerated detection. The "
         "Bi-LSTM is trained on these residual dynamics so the hybrid model can correct the SICA "
         "baseline when surveillance regimes change.</div>",
         unsafe_allow_html=True,
@@ -280,12 +291,12 @@ with st.expander("Model parameters and limitations"):
     st.write(f"α (ART failure / progression rate): **{calibrated_params.alpha:.5f}**")
     st.caption(
         "ρ and α converged at their bounds (0.01 and 0.9 respectively) -- a sign of "
-        "parameter non-identifiability with only 3 free parameters fit against 39 points. "
+        f"parameter non-identifiability with only 3 free parameters fit against {n_train} points. "
         "State this explicitly as a limitation; consider widening bounds or fixing fewer "
         "parameters as a refinement before final submission."
     )
 
 st.caption(
     "Data source: National STD/AIDS Control Programme (NSACP), Ministry of Health, Sri Lanka -- "
-    "quarterly surveillance update reports, 2008 Q1 to 2025 Q3."
+    f"quarterly surveillance update reports, {first_period} to {last_period}."
 )

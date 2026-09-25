@@ -10,6 +10,7 @@ from benchmark_models import (
     METRIC_LABELS, MODE_LABELS,
     BenchmarkConfig, run_benchmark, results_to_dataframe, summarize, verdict_lines,
 )
+from quarterly_data import get_quarterly_dataframe
 from sidebar import render_sidebar
 
 
@@ -48,6 +49,14 @@ st.markdown("""
 
 render_sidebar("benchmark")
 
+df_scope = get_quarterly_dataframe()
+total_quarters = len(df_scope)
+first_period = f"{int(df_scope.iloc[0]['year'])} Q{int(df_scope.iloc[0]['quarter'])}"
+last_period = f"{int(df_scope.iloc[-1]['year'])} Q{int(df_scope.iloc[-1]['quarter'])}"
+benchmark_n_test = BenchmarkConfig().n_test
+benchmark_n_train = total_quarters - benchmark_n_test
+test_start_period = f"{int(df_scope.iloc[-benchmark_n_test]['year'])} Q{int(df_scope.iloc[-benchmark_n_test]['quarter'])}"
+
 MODEL_COLORS = {
     HYBRID: "#00E676",
     SICA: "#FFA500",
@@ -71,8 +80,9 @@ st.markdown(
 st.markdown('<div style="height: 1.1rem"></div>', unsafe_allow_html=True)
 
 st.info(
-    "**How the comparison is kept fair.** All models are fitted on 2008 Q1 - 2023 Q4 and scored on "
-    "2024 Q1 - 2025 Q3 (never seen while fitting). SICA is calibrated on the training quarters only. "
+    f"**How the comparison is kept fair.** All models are fitted on {first_period} - "
+    f"the quarter before {test_start_period} ({benchmark_n_train} quarters) and scored on "
+    f"{test_start_period} - {last_period} ({benchmark_n_test} quarters, never seen while fitting). SICA is calibrated on the training quarters only. "
     "The three neural models share one recipe (window, units, dropout, optimiser, early stopping on a "
     "chronological validation slice) and are trained with several random seeds, so scores are "
     "mean \u00b1 spread, not a single lucky run. Because the SICA calibration here excludes the test "
@@ -139,8 +149,8 @@ with v1:
     mode = st.radio(
         "Evaluation mode", list(MODE_LABELS), format_func=lambda k: MODE_LABELS[k], horizontal=True,
         help="One-step: each quarter is predicted from the real history before it. "
-             "Multi-step: all 7 quarters are forecast blind from the end of training, "
-             "which is how the 2026-2030 forecast works.",
+               f"Multi-step: all {benchmark_n_test} quarters are forecast blind from the end of training, "
+               "which matches the forward-forecast evaluation design.",
     )
 with v2:
     metric = st.selectbox("Ranking metric", list(METRIC_LABELS), index=1, format_func=lambda k: METRIC_LABELS[k])
@@ -177,7 +187,7 @@ table = pd.DataFrame({
 st.dataframe(table, width="stretch", hide_index=True)
 st.caption("\u2605 marks the best value in each column. MAE and RMSE are in cases per quarter. "
            "\u00b1 is the spread across training seeds (deterministic models have none). "
-           "R\u00b2 is computed on only 7 points, so it can be negative.")
+           f"R\u00b2 is computed on only {benchmark_n_test} points, so it can be negative.")
 
 fig_bar = go.Figure(go.Bar(
     x=df["Model"], y=df[metric],

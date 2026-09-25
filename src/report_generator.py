@@ -82,13 +82,13 @@ def _selected_forecast_rows(future_results, year_filter):
     return list(rows)
 
 
-def _technical_specification(styles, horizon_text, last_real_text):
+def _technical_specification(styles, horizon_text, last_real_text, data_scope):
     rows = [
         [Paragraph("Technical specification", styles["table_header"]), ""],
         [Paragraph("Model architecture", styles["table_cell"]),
          Paragraph("Hybrid SICA (compartmental ODE) + Bidirectional LSTM residual correction.", styles["table_cell"])],
         [Paragraph("Data source and scope", styles["table_cell"]),
-         Paragraph("National STD/AIDS Control Programme (NSACP), Ministry of Health, Sri Lanka; 71 quarters (2008 Q1 – 2025 Q3).", styles["table_cell"])],
+         Paragraph(f"National STD/AIDS Control Programme (NSACP), Ministry of Health, Sri Lanka; {data_scope}.", styles["table_cell"])],
         [Paragraph("Hyperparameters", styles["table_cell"]),
          Paragraph("Bi-LSTM units = 16; lookback window <i>w</i> = 4 quarters; dropout = 0.2; optimizer = Adam (learning rate = 5 × 10<super>−3</super>).", styles["table_cell"])],
         [Paragraph("Forecast horizon", styles["table_cell"]),
@@ -118,11 +118,20 @@ def build_forecast_pdf(future_results, last_real_year, last_real_quarter, last_r
     """Return a thesis-appendix PDF for the full horizon or one selected year."""
     styles = _paragraph_styles()
     selected_rows = _selected_forecast_rows(future_results, year_filter)
-    horizon_text = (
-        f"{year_filter} Q1 – {year_filter} Q4 (4 quarters)"
-        if year_filter is not None else "2026 Q1 – 2030 Q4 (20 quarters)"
-    )
+    future_labels = future_results["future_labels"]
+    forecast_start = f"{future_labels[0][0]} Q{future_labels[0][1]}"
+    forecast_end = f"{future_labels[-1][0]} Q{future_labels[-1][1]}"
+    selected_start = f"{labels[0][0]} Q{labels[0][1]}" if (labels := [row[0] for row in selected_rows]) else forecast_start
+    selected_end = f"{labels[-1][0]} Q{labels[-1][1]}" if labels else forecast_end
+    horizon_text = f"{selected_start} – {selected_end} ({len(selected_rows)} quarters)"
     title_suffix = f" — {year_filter}" if year_filter is not None else ""
+    historical_df = future_results["df_historical"]
+    total_quarters = len(historical_df)
+    first_period = f"{int(historical_df.iloc[0]['year'])} Q{int(historical_df.iloc[0]['quarter'])}"
+    last_period = f"{int(historical_df.iloc[-1]['year'])} Q{int(historical_df.iloc[-1]['quarter'])}"
+    data_scope = f"{total_quarters} quarters ({first_period} – {last_period})"
+    n_test = min(7, total_quarters)
+    test_start = f"{int(historical_df.iloc[-n_test]['year'])} Q{int(historical_df.iloc[-n_test]['quarter'])}"
     last_real_text = (
         f"{int(last_real_year)} Q{int(last_real_quarter)} "
         f"({int(last_real_value)} reported cases)"
@@ -141,7 +150,7 @@ def build_forecast_pdf(future_results, last_real_year, last_real_quarter, last_r
         Paragraph("Hybrid SICA + Bi-LSTM Forecasting Model — Sri Lanka", styles["subtitle"]),
         HRFlowable(width="100%", thickness=1, color=NAVY),
         Spacer(1, 7),
-        _technical_specification(styles, horizon_text, last_real_text),
+        _technical_specification(styles, horizon_text, last_real_text, data_scope),
         Spacer(1, 9),
     ]
 
@@ -211,7 +220,8 @@ def build_forecast_pdf(future_results, last_real_year, last_real_quarter, last_r
 
     elements.append(Paragraph("4. Validation summary", styles["section"]))
     elements.append(Paragraph(
-        "Chronological out-of-sample validation used a held-out 2024–2025 test window, with SICA "
+        f"Chronological out-of-sample validation used a held-out {n_test}-quarter test window "
+        f"({test_start} – {last_period}), with SICA "
         "calibration and residual training performed using the training portion only. The reported "
         "reference metrics are SICA MAPE = 26.90% and Hybrid MAPE = 7.00%. These values summarize "
         "the model comparison used by the forecasting study and are presented as validation context, "
@@ -221,14 +231,14 @@ def build_forecast_pdf(future_results, last_real_year, last_real_quarter, last_r
     elements.append(Paragraph("5. Data citation, interpretation, and limitations", styles["section"]))
     elements.append(Paragraph(
         "Data source: National STD/AIDS Control Programme, Ministry of Health, Sri Lanka, quarterly "
-        "HIV surveillance reports covering 2008 Q1–2025 Q3. The source series represents reported "
+        f"HIV surveillance reports covering {first_period} – {last_period}. The source series represents reported "
         "cases and should be interpreted in the context of testing coverage, reporting practices, "
         "diagnostic delays, treatment access, and other surveillance-system changes. The exact source "
         "report or data-file identifier should be added to the dissertation reference list alongside "
         "the archived dataset used for model fitting.", styles["body"]
     ))
     elements.append(Paragraph(
-        "The 2026–2030 values are model-based projections, not observed counts. Uncertainty increases "
+        f"The {forecast_start} – {forecast_end} values are model-based projections, not observed counts. Uncertainty increases "
         "with forecast horizon because the residual model is rolled forward autoregressively. These "
         "estimates are suitable for research interpretation and scenario planning, but must not be used "
         "as the sole basis for clinical, funding, or public-health policy decisions without independent "

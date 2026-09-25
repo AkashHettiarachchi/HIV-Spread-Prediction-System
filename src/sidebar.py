@@ -14,6 +14,7 @@ _NAV_ITEMS = [
     {"key": "overview", "page": "", "label": "Analytics overview"},
     {"key": "forecast", "page": "pages/2_Future_Forecast.py", "label": "Forecast horizon"},
     {"key": "benchmark", "page": "pages/4_Model_Benchmark.py", "label": "Model benchmark"},
+    {"key": "scenario", "page": "pages/5_Scenario_Simulation.py", "label": "Scenario simulation"},
     {"key": "assistant", "page": "pages/3_AI_Assistant.py", "label": "AI knowledge assistant"},
 ]
 
@@ -40,6 +41,13 @@ _ACTIVE_ICON_SVG = {
         '<path d="M4 18V8M10 18V4M16 18v-8M22 18V6"></path>'
         '</svg>'
     ),
+    "scenario": (
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#72FF98" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M6 3h12l-1 5-4 4v5l3 3H8l3-3v-5L7 8 6 3z"></path>'
+        '<path d="M8 8h8"></path>'
+        '</svg>'
+    ),
     "assistant": (
         '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#72FF98" '
         'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
@@ -53,6 +61,7 @@ _ENABLED_ICON = {
     "overview": ":material/analytics:",
     "forecast": ":material/arrow_forward:",
     "benchmark": ":material/bar_chart:",
+    "scenario": ":material/science:",
     "assistant": ":material/chat:",
 }
 

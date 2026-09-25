@@ -1,12 +1,17 @@
 from pathlib import Path
 import re
 import time
+from dataclasses import replace
 
 import numpy as np
 import streamlit as st
 
 from quarterly_data import get_quarterly_dataframe
-from calibration_quarterly import calibrate_quarterly
+from calibration_quarterly import (
+    calibrate_quarterly,
+    initial_conditions_2008q1,
+    sica_quarterly_predictions,
+)
 from forecast_future import forecast_future
 from hybrid_pipeline_quarterly import run as run_hybrid_pipeline
 from sidebar import render_sidebar
@@ -21,6 +26,7 @@ GREETING_RESPONSE = (
     "Hello! I am the Preditca AI Knowledge Assistant. How can I assist you with "
     "HIV forecasting, epidemiology, or health knowledge today?"
 )
+_SCENARIO_RUNTIME = None
 
 
 st.set_page_config(
@@ -50,7 +56,7 @@ def is_in_scope(prompt):
         "health", "healthcare", "public health", "medical", "disease", "infection",
         "transmission", "prevention", "testing", "treatment", "art", "viral",
         "surveillance", "outbreak", "pandemic", "mortality", "incidence", "mape",
-        "rmse", "mae", "r2", "confidence interval", "calibration", "parameter","gap", "bap", "quarter", "quter", "q1", "q2", "q3", "q4", "2025", "2026",
+        "rmse", "mae", "r2", "confidence interval", "calibration", "parameter",
         "actual", "real", "observed", "predict", "predicted", "difference", "number",
         "data", "document", "cases", "figure", "stat", "value", "trend"
     )
@@ -70,6 +76,114 @@ def is_simple_greeting(prompt):
     return normalized_prompt in greetings
 
 
+def simulate_scenario_delta(
+    target_quarter_idx,
+    beta_mult=1.0,
+    testing_mult=1.0,
+    art_mult=1.0,
+):
+    """Calculate one forecast-quarter counterfactual from the cached baseline."""
+    if _SCENARIO_RUNTIME is None:
+        raise RuntimeError("Scenario forecast context has not been initialized.")
+
+    runtime = _SCENARIO_RUNTIME
+    if not 0 <= target_quarter_idx < len(runtime["future_labels"]):
+        raise IndexError("Target quarter is outside the available forecast horizon.")
+
+    target_idx = int(target_quarter_idx)
+    label = runtime["future_labels"][target_idx]
+    sica_base = float(runtime["sica_future"][target_idx])
+    hybrid_base = float(runtime["hybrid_future"][target_idx])
+    residual_base = hybrid_base - sica_base
+
+    base_params = runtime["calibrated_params"]
+    scenario_params = replace(
+        base_params,
+        beta=base_params.beta * beta_mult,
+        alpha=base_params.alpha * art_mult,
+    )
+    sica_sim_all = sica_quarterly_predictions(
+        scenario_params,
+        runtime["y0"],
+        n_quarters=runtime["n_observed"] + target_idx + 1,
+    )
+    sica_sim = float(sica_sim_all[runtime["n_observed"] + target_idx])
+    residual_sim = residual_base * testing_mult
+    hybrid_sim = sica_sim + residual_sim
+    beta_sim = float(scenario_params.beta)
+    alpha_sim = float(scenario_params.alpha)
+
+    return {
+        "quarter": f"{label[0]} Q{label[1]}",
+        "beta_mult": float(beta_mult),
+        "testing_mult": float(testing_mult),
+        "art_mult": float(art_mult),
+        "y_sica_base": sica_base,
+        "y_hybrid_base": hybrid_base,
+        "e_bilstm_base": residual_base,
+        "calibrated_beta": float(base_params.beta),
+        "beta_sim": beta_sim,
+        "calibrated_alpha": float(base_params.alpha),
+        "alpha_sim": alpha_sim,
+        "y_sica_sim": sica_sim,
+        "e_sim": residual_sim,
+        "y_hybrid_sim": hybrid_sim,
+        "delta_cases": hybrid_sim - hybrid_base,
+    }
+
+
+def _parse_scenario_request(prompt, future_labels):
+    """Extract quarter and percentage changes for a policy counterfactual."""
+    normalized = prompt.lower()
+    has_policy_term = bool(
+        re.search(r"\b(testing|surveillance|transmission|beta|alpha|art|treatment)\b", normalized)
+    )
+    if not has_policy_term:
+        return None
+
+    quarter_match = re.search(r"\b(20\d{2})\s*q\s*([1-4])\b", normalized)
+    if quarter_match:
+        requested_label = (int(quarter_match.group(1)), int(quarter_match.group(2)))
+        try:
+            target_idx = future_labels.index(requested_label)
+        except ValueError:
+            return {"unavailable_quarter": requested_label}
+    else:
+        target_idx = 0
+
+    multipliers = {"beta_mult": 1.0, "testing_mult": 1.0, "art_mult": 1.0}
+    category_terms = {
+        "beta_mult": ("beta", "transmission"),
+        "testing_mult": ("testing", "surveillance"),
+        "art_mult": ("alpha", "art", "treatment"),
+    }
+    clauses = re.split(r"[,;]|\b(?:and|then|while)\b", normalized)
+    for clause in clauses:
+        percentage_matches = list(
+            re.finditer(r"(\d+(?:\.\d+)?)\s*(?:%|\bpercent\b)", clause)
+        )
+        for match in percentage_matches:
+            percentage = float(match.group(1)) / 100.0
+            for key, terms in category_terms.items():
+                if not any(re.search(rf"\b{re.escape(term)}\b", clause) for term in terms):
+                    continue
+                reduction = bool(
+                    re.search(r"\b(reduc\w*|decreas\w*|lower\w*|cut|fall\w*|drop\w*)\b", clause)
+                )
+                explicit_negative = bool(
+                    re.search(r"[-\u2212]\s*$", clause[:match.start()])
+                )
+                reduction = reduction or explicit_negative
+                direction = -1.0 if reduction else 1.0
+                if key == "beta_mult" and "risk reduction" in clause:
+                    direction = -1.0
+                multipliers[key] = 1.0 + direction * percentage
+
+    if all(value == 1.0 for value in multipliers.values()):
+        return None
+    return {"target_quarter_idx": target_idx, **multipliers}
+
+
 @st.cache_data(show_spinner=False)
 def build_system_context(observed_values):
     """Build prompt context from the current dataset and model calculations."""
@@ -84,7 +198,15 @@ def build_system_context(observed_values):
     validation = run_hybrid_pipeline()
     sica_metrics = _metrics(validation["real_test"], validation["sica_test"])
     hybrid_metrics = _metrics(validation["real_test"], validation["hybrid_test"])
-    future = forecast_future(n_future_quarters=20)
+    last_year = int(df.iloc[-1]["year"])
+    last_quarter = int(df.iloc[-1]["quarter"])
+    start_quarter = last_quarter % 4 + 1
+    start_year = last_year + (1 if last_quarter == 4 else 0)
+    future = forecast_future(
+        n_future_quarters=20,
+        start_year=start_year,
+        start_quarter=start_quarter,
+    )
 
     bound_hits = []
     if np.isclose(calibrated_params.beta, 0.001) or np.isclose(calibrated_params.beta, 2.0):
@@ -103,6 +225,32 @@ def build_system_context(observed_values):
             f"{label[0]} Q{label[1]}: SICA={sica:.1f}, Hybrid={hybrid:.1f}, "
             f"95% CI=[{lower:.1f}, {upper:.1f}]"
         )
+
+    scenario_runtime = {
+        "n_observed": len(observed_values),
+        "y0": initial_conditions_2008q1(),
+        "calibrated_params": future["calibrated_params"],
+        "future_labels": list(future["future_labels"]),
+        "sica_future": np.asarray(future["sica_future"], dtype=float),
+        "hybrid_future": np.asarray(future["hybrid_future"], dtype=float),
+    }
+    global _SCENARIO_RUNTIME
+    _SCENARIO_RUNTIME = scenario_runtime
+    standard_scenarios = []
+    for target_idx, label in enumerate(scenario_runtime["future_labels"][:4]):
+        standard_scenarios.append({
+            "quarter": f"{label[0]} Q{label[1]}",
+            "baseline": simulate_scenario_delta(target_idx),
+            "testing_plus_10": simulate_scenario_delta(target_idx, testing_mult=1.10),
+            "beta_minus_10": simulate_scenario_delta(target_idx, beta_mult=0.90),
+            "art_plus_10": simulate_scenario_delta(target_idx, art_mult=1.10),
+        })
+
+    historical_labels = [
+        f"{int(row['year'])} Q{int(row['quarter'])}" for _, row in df.iterrows()
+    ]
+    covid_labels = [label for label in historical_labels if "2020 Q" in label or "2021 Q" in label]
+    post_pandemic_labels = [label for label in historical_labels if label >= "2022 Q2"]
 
     return {
         "n_observed": len(observed_values),
@@ -127,7 +275,13 @@ def build_system_context(observed_values):
             "mape": float(hybrid_metrics["mape"]),
         },
         "sigma_e": float(future["sigma_e"]),
+        "forecast_start": f"{future['future_labels'][0][0]} Q{future['future_labels'][0][1]}",
+        "forecast_end": f"{future['future_labels'][-1][0]} Q{future['future_labels'][-1][1]}",
+        "covid_period": f"{covid_labels[0]} through {covid_labels[-1]}" if covid_labels else "the available disruption period",
+        "post_pandemic_period": f"{post_pandemic_labels[0]} through {post_pandemic_labels[-1]}" if post_pandemic_labels else "the available post-pandemic period",
         "forecast_lines": forecast_lines,
+        "standard_scenarios": standard_scenarios,
+        "scenario_runtime": scenario_runtime,
     }
 
 
@@ -138,6 +292,44 @@ def build_system_prompt(context):
     forecast_metrics = context["forecast_metrics"]
     bound_text = ", ".join(context["bound_hits"]) if context["bound_hits"] else "none detected"
     forecast_text = "\n".join(f"  - {line}" for line in context["forecast_lines"])
+    scenario_lines = []
+    for scenario in context["standard_scenarios"]:
+        baseline = scenario["baseline"]
+        testing = scenario["testing_plus_10"]
+        beta = scenario["beta_minus_10"]
+        art = scenario["art_plus_10"]
+        scenario_lines.append(
+            f"  - {scenario['quarter']}: baseline SICA={baseline['y_sica_base']:.4f}, "
+            f"Hybrid={baseline['y_hybrid_base']:.4f}, residual={baseline['e_bilstm_base']:.4f}; "
+            f"testing +10% delta={testing['delta_cases']:+.4f}, "
+            f"simulated Hybrid={testing['y_hybrid_sim']:.4f}; "
+            f"beta -10% delta={beta['delta_cases']:+.4f}, "
+            f"simulated Hybrid={beta['y_hybrid_sim']:.4f}; "
+            f"ART +10% delta={art['delta_cases']:+.4f}, "
+            f"simulated Hybrid={art['y_hybrid_sim']:.4f}"
+        )
+    scenario_text = "\n".join(scenario_lines)
+
+    requested = context.get("requested_scenario")
+    if requested and "unavailable_quarter" in requested:
+        requested_scenario_text = (
+            f"No calculated forecast scenario is available for {requested['unavailable_quarter'][0]} "
+            f"Q{requested['unavailable_quarter'][1]}. Do not estimate a numeric result."
+        )
+    elif requested:
+        requested_scenario_text = (
+            f"Quarter: {requested['quarter']}; multipliers: beta={requested['beta_mult']:.6f}, "
+            f"testing={requested['testing_mult']:.6f}, ART={requested['art_mult']:.6f}. "
+                f"Forecast calibration: beta={requested['calibrated_beta']:.6f} -> "
+                f"{requested['beta_sim']:.6f}, alpha={requested['calibrated_alpha']:.6f} -> "
+                f"{requested['alpha_sim']:.6f}. "
+            f"Baseline: SICA={requested['y_sica_base']:.4f}, Hybrid={requested['y_hybrid_base']:.4f}, "
+            f"residual={requested['e_bilstm_base']:.4f}. Simulated: SICA={requested['y_sica_sim']:.4f}, "
+            f"residual={requested['e_sim']:.4f}, Hybrid={requested['y_hybrid_sim']:.4f}. "
+            f"Exact delta (simulated minus baseline)={requested['delta_cases']:+.4f} cases."
+        )
+    else:
+        requested_scenario_text = "No single custom scenario was calculated for this message."
 
     return f"""You are Preditca's expert HIV epidemiology, forecasting, and XAI assistant.
 
@@ -164,14 +356,24 @@ DYNAMIC SYSTEM CONTEXT
 - Held-out Hybrid SICA + Bi-LSTM metrics: MAE={hybrid['mae']:.4f}, RMSE={hybrid['rmse']:.4f}, MAPE={hybrid['mape']:.4f}%.
 - Current dynamically calculated Hybrid validation metric bundle: R2={forecast_metrics['r2']:.6f}, MAE={forecast_metrics['mae']:.4f}, RMSE={forecast_metrics['rmse']:.4f}, MAPE={forecast_metrics['mape']:.4f}%. R2 is calculated on the same held-out arrays; it is not a hardcoded project claim.
 - Neural configuration: Bidirectional LSTM, 16 units, lookback w=4 quarters, dropout=0.2, Adam learning rate=0.005.
-- Future forecast: 20 quarters, 2026 Q1 through 2030 Q4; residual-fit sigma_e={context['sigma_e']:.4f}; 95% intervals use SE(t)=sigma_e*sqrt(1+0.05*(t-1)) and 1.96*SE(t).
+- Future forecast: {len(context['forecast_lines'])} quarters, {context['forecast_start']} through {context['forecast_end']}; residual-fit sigma_e={context['sigma_e']:.4f}; 95% intervals use SE(t)=sigma_e*sqrt(1+0.05*(t-1)) and 1.96*SE(t).
 - Exact future projections and intervals:
 {forecast_text}
+
+COUNTERFACTUAL / WHAT-IF POLICY SCENARIOS
+- Use the dynamically calculated scenario values below; never use remembered or hardcoded quarter values. For each quarter, the baseline residual is E_BiLSTM = Y_Hybrid - Y_SICA.
+- The exact simulation rules are: E_sim = E_BiLSTM * testing_mult; beta_sim = calibrated_beta * beta_mult; alpha_sim = calibrated_alpha * art_mult; re-solve the SICA ODE with beta_sim and alpha_sim to get Y_SICA_sim; Y_Hybrid_sim = Y_SICA_sim + E_sim; delta_cases = Y_Hybrid_sim - Y_Hybrid_base. A negative delta means fewer modeled cases than baseline; a positive delta can reflect increased detection as well as changed transmission/treatment dynamics.
+- Testing/surveillance changes directly scale the Bi-LSTM residual. Transmission and ART changes alter the SICA trajectory through the ODE. Do not treat testing-related detected cases as new infections or claim causality.
+- Standard intervention scenarios dynamically calculated for the next four forecast quarters (deltas are simulated minus baseline):
+{scenario_text}
+- For every quantitative policy question, give calculated numeric results first and show the arithmetic step by step using the requested-scenario calculation below or the matching dynamic standard-scenario row. If no magnitude is specified, clearly label the matching precomputed 10% standard scenario. Never invent unavailable values. Briefly explain whether the modeled shift comes from the SICA ODE, the Bi-LSTM residual, or both.
+- Requested-scenario calculation for this user message: {requested_scenario_text}
+- End counterfactual answers by directing the user to the 🧪 Scenario Simulation page for custom slider controls across 2026-2027, including transmission, testing/surveillance, and ART levers.
 
 DOMAIN AND XAI GUIDANCE
 - Explain SICA compartments as S (Susceptible), I (Undiagnosed/Infected), C (Chronic/ART), and A (AIDS stage).
 - Explain residual learning as E_t = Y_actual,t - Y_SICA,t and hybrid prediction as Y_hat_t = Y_SICA,t + E_hat_BiLSTM,t.
-- Explain that COVID-19 testing and reporting disruptions during 2020 Q1–2021 Q4 can create negative residuals, while expanded MSM testing and accelerated detection during 2022 Q2–2025 Q3 can create a positive residual shift. These are interpretation annotations, not proof of causality.
+- Explain that COVID-19 testing and reporting disruptions during {context['covid_period']} can create negative residuals, while expanded MSM testing and accelerated detection during {context['post_pandemic_period']} can create a positive residual shift. These are interpretation annotations, not proof of causality.
 - Discuss reliability honestly: chronological hold-out evaluation is stronger than random splitting, but one 7-quarter test window is limited. Multi-seed reproducibility requires explicitly controlling Python, NumPy, and TensorFlow seeds; do not claim it was performed unless results are provided.
 - Treat the forecast as a research projection with compounding uncertainty, not an observed count or a clinical/policy decision rule.
 
@@ -229,7 +431,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 st.markdown(
-    '<div class="context-strip"><div class="context-item"><div class="context-label">Project coverage</div><div class="context-value">71 NSACP quarters</div></div><div class="context-item"><div class="context-label">Model core</div><div class="context-value">SICA + Bi-LSTM</div></div><div class="context-item"><div class="context-label">Forecast horizon</div><div class="context-value">2026 Q1 - 2030 Q4</div></div></div>',
+    f'<div class="context-strip"><div class="context-item"><div class="context-label">Project coverage</div><div class="context-value">{len(get_quarterly_dataframe())} NSACP quarters</div></div><div class="context-item"><div class="context-label">Model core</div><div class="context-value">SICA + Bi-LSTM</div></div><div class="context-item"><div class="context-label">Forecast horizon</div><div class="context-value">From latest observed quarter onward</div></div></div>',
     unsafe_allow_html=True,
 )
 
@@ -303,6 +505,19 @@ if prompt:
         system_context = build_system_context(
             tuple(current_df["new_cases"].astype(float).tolist())
         )
+        _SCENARIO_RUNTIME = system_context["scenario_runtime"]
+        parsed_scenario = _parse_scenario_request(
+            prompt,
+            system_context["scenario_runtime"]["future_labels"],
+        )
+        if parsed_scenario:
+            system_context = dict(system_context)
+            if "unavailable_quarter" in parsed_scenario:
+                system_context["requested_scenario"] = parsed_scenario
+            else:
+                system_context["requested_scenario"] = simulate_scenario_delta(
+                    **parsed_scenario
+                )
         dynamic_system_prompt = build_system_prompt(system_context)
         client = genai.Client(api_key=api_key)
         conversation = [
