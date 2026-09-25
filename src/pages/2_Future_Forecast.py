@@ -84,6 +84,19 @@ fig_future.add_trace(go.Scatter(
     line=dict(color="#8A99AD", width=1.5),
 ))
 fig_future.add_trace(go.Scatter(
+    x=future_labels_x, y=future_results["hybrid_upper"], mode="lines",
+    name="Upper 95% CI",
+    line=dict(color="#75f0a8", width=1, dash="dot"),
+    showlegend=False,
+))
+fig_future.add_trace(go.Scatter(
+    x=future_labels_x, y=future_results["hybrid_lower"], mode="lines",
+    name="95% CI",
+    line=dict(color="#75f0a8", width=1, dash="dot"),
+    fill="tonexty",
+    fillcolor="rgba(117, 240, 168, 0.15)",
+))
+fig_future.add_trace(go.Scatter(
     x=future_labels_x, y=future_results["hybrid_future"], mode="lines+markers",
     name="Hybrid forecast (2026-2030)",
     line=dict(color="#00E676", width=3), marker=dict(size=6, color="#00E676"),
@@ -111,6 +124,8 @@ future_df = pd.DataFrame({
     "Quarter": [q for yr, q in future_results["future_labels"]],
     "SICA-only": np.round(future_results["sica_future"], 1),
     "Hybrid forecast": np.round(future_results["hybrid_future"], 1),
+    "Lower 95% CI": np.round(future_results["hybrid_lower"], 1),
+    "Upper 95% CI": np.round(future_results["hybrid_upper"], 1),
 })
 st.markdown('<div class="section-kicker">Projection detail</div>', unsafe_allow_html=True)
 st.subheader("Quarterly forecast")

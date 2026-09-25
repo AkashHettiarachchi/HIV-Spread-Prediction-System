@@ -1,187 +1,243 @@
-"""
-Generates a downloadable PDF report of the HIV forecast, styled to
-resemble the official NSACP quarterly report format (header box with
-key stats, then a data table, then a summary section) so it reads as
-a familiar, professional document when shown to your supervisor or
-included as a dissertation appendix.
-
-Uses reportlab (pip install reportlab) -- pure Python, no external
-binaries needed, works the same on Windows/Mac/Linux.
-"""
+"""Create thesis-ready PDF reports for the quarterly HIV forecast."""
 
 import io
 from datetime import date
 
 from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import A4
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
-from reportlab.platypus import (
-    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
-)
+from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
-def build_forecast_pdf(future_results, last_real_year, last_real_quarter, last_real_value,
-                        year_filter: int = None) -> bytes:
-    """
-    future_results: the dict returned by forecast_future.forecast_future()
-    year_filter: if given (e.g. 2027), the report covers ONLY that year's
-                 4 quarters instead of the full 2026-2030 horizon.
-    Returns raw PDF bytes, ready for st.download_button.
-    """
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buffer, pagesize=A4,
-        topMargin=1.5 * cm, bottomMargin=1.5 * cm,
-        leftMargin=1.5 * cm, rightMargin=1.5 * cm,
-    )
+NAVY = colors.HexColor("#1E3A5F")
+BLUE = colors.HexColor("#DCE8F5")
+PALE_BLUE = colors.HexColor("#F3F7FB")
+GREY = colors.HexColor("#555555")
 
+
+def _paragraph_styles():
     styles = getSampleStyleSheet()
-    title_style = ParagraphStyle(
-        "TitleCustom", parent=styles["Title"], fontSize=14, spaceAfter=4, alignment=1,
-    )
-    subtitle_style = ParagraphStyle(
-        "SubtitleCustom", parent=styles["Normal"], fontSize=10, alignment=1,
-        textColor=colors.HexColor("#333333"), spaceAfter=10,
-    )
-    section_style = ParagraphStyle(
-        "SectionCustom", parent=styles["Heading2"], fontSize=11, spaceBefore=12, spaceAfter=6,
-    )
-    note_style = ParagraphStyle(
-        "NoteCustom", parent=styles["Normal"], fontSize=8, textColor=colors.HexColor("#555555"),
-        spaceBefore=6,
-    )
+    return {
+        "title": ParagraphStyle(
+            "ReportTitle", parent=styles["Title"], fontName="Helvetica-Bold",
+            fontSize=15, leading=18, alignment=TA_CENTER, spaceAfter=4,
+        ),
+        "subtitle": ParagraphStyle(
+            "ReportSubtitle", parent=styles["Normal"], fontSize=9.5,
+            leading=12, alignment=TA_CENTER, textColor=GREY, spaceAfter=8,
+        ),
+        "section": ParagraphStyle(
+            "SectionHeading", parent=styles["Heading2"], fontName="Helvetica-Bold",
+            fontSize=11, leading=14, textColor=NAVY, spaceBefore=10, spaceAfter=5,
+        ),
+        "body": ParagraphStyle(
+            "BodyTextAcademic", parent=styles["BodyText"], fontSize=8.5,
+            leading=11, alignment=TA_LEFT, spaceAfter=5,
+        ),
+        "small": ParagraphStyle(
+            "SmallTextAcademic", parent=styles["BodyText"], fontSize=7.5,
+            leading=9.5, textColor=GREY, spaceAfter=3,
+        ),
+        "table_header": ParagraphStyle(
+            "TableHeader", parent=styles["Normal"], fontName="Helvetica-Bold",
+            fontSize=7.5, leading=9, textColor=colors.white, alignment=TA_CENTER,
+        ),
+        "table_cell": ParagraphStyle(
+            "TableCell", parent=styles["Normal"], fontSize=7.5, leading=9,
+            alignment=TA_CENTER,
+        ),
+    }
 
-    elements = []
 
-    # ---- Determine which quarters this report covers ----
+def _academic_table(rows, col_widths, repeat_rows=1):
+    table = Table(rows, colWidths=col_widths, repeatRows=repeat_rows, hAlign="LEFT")
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("GRID", (0, 0), (-1, -1), 0.45, colors.HexColor("#8A9AAA")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, PALE_BLUE]),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    return table
+
+
+def _selected_forecast_rows(future_results, year_filter):
+    rows = zip(
+        future_results["future_labels"],
+        future_results["sica_future"],
+        future_results["hybrid_future"],
+        future_results["hybrid_lower"],
+        future_results["hybrid_upper"],
+    )
     if year_filter is not None:
-        filtered = [
-            (label, sica_val, hybrid_val)
-            for label, sica_val, hybrid_val in zip(
-                future_results["future_labels"], future_results["sica_future"], future_results["hybrid_future"]
-            )
-            if label[0] == year_filter
-        ]
-        labels = [f[0] for f in filtered]
-        sica_vals = [f[1] for f in filtered]
-        hybrid_vals = [f[2] for f in filtered]
-        horizon_text = f"{year_filter} Q1 &ndash; {year_filter} Q4 (4 quarters)"
-        report_title_suffix = f" &mdash; {year_filter}"
-    else:
-        labels = future_results["future_labels"]
-        sica_vals = list(future_results["sica_future"])
-        hybrid_vals = list(future_results["hybrid_future"])
-        horizon_text = "2026 Q1 &ndash; 2030 Q4 (20 quarters)"
-        report_title_suffix = ""
+        rows = (row for row in rows if row[0][0] == year_filter)
+    return list(rows)
 
-    # ---- Header ----
-    elements.append(Paragraph(f"HIV/AIDS Incidence Forecast Report{report_title_suffix}", title_style))
-    elements.append(Paragraph(
-        "Hybrid SICA + Bi-LSTM Forecasting Model &mdash; Sri Lanka", subtitle_style
-    ))
-    elements.append(HRFlowable(width="100%", thickness=1, color=colors.black))
-    elements.append(Spacer(1, 8))
 
-    # ---- Key stats box (mirrors the NSACP "HIV statistics" box style) ----
-    stats_data = [
-        ["Last real data point", f"{last_real_year:.0f} Q{last_real_quarter:.0f}  "
-                                  f"({last_real_value:.0f} reported cases)"],
-        ["Forecast horizon", horizon_text],
-        ["Model", "Hybrid: calibrated SICA compartmental model "
-                  "+ Bidirectional LSTM residual correction"],
-        ["Data source", "National STD/AIDS Control Programme (NSACP), "
-                         "Ministry of Health, Sri Lanka &mdash; quarterly surveillance reports"],
-        ["Report generated", date.today().strftime("%Y-%m-%d")],
+def _technical_specification(styles, horizon_text, last_real_text):
+    rows = [
+        [Paragraph("Technical specification", styles["table_header"]), ""],
+        [Paragraph("Model architecture", styles["table_cell"]),
+         Paragraph("Hybrid SICA (compartmental ODE) + Bidirectional LSTM residual correction.", styles["table_cell"])],
+        [Paragraph("Data source and scope", styles["table_cell"]),
+         Paragraph("National STD/AIDS Control Programme (NSACP), Ministry of Health, Sri Lanka; 71 quarters (2008 Q1 – 2025 Q3).", styles["table_cell"])],
+        [Paragraph("Hyperparameters", styles["table_cell"]),
+         Paragraph("Bi-LSTM units = 16; lookback window <i>w</i> = 4 quarters; dropout = 0.2; optimizer = Adam (learning rate = 5 × 10<super>−3</super>).", styles["table_cell"])],
+        [Paragraph("Forecast horizon", styles["table_cell"]),
+         Paragraph(f"{horizon_text} with 95% confidence intervals.", styles["table_cell"])],
+        [Paragraph("Reference observation", styles["table_cell"]),
+         Paragraph(last_real_text, styles["table_cell"])],
     ]
-    stats_table = Table(
-        [[Paragraph(f"<b>{k}</b>", styles["Normal"]), Paragraph(v, styles["Normal"])]
-         for k, v in stats_data],
-        colWidths=[5 * cm, 11.5 * cm],
-    )
-    stats_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F0F0F0")),
-        ("BOX", (0, 0), (-1, -1), 0.75, colors.black),
-        ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.grey),
+    table = Table(rows, colWidths=[4.2 * cm, 12.3 * cm], hAlign="LEFT")
+    table.setStyle(TableStyle([
+        ("SPAN", (0, 0), (-1, 0)),
+        ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("BACKGROUND", (0, 1), (0, -1), BLUE),
+        ("BOX", (0, 0), (-1, -1), 0.75, NAVY),
+        ("INNERGRID", (0, 1), (-1, -1), 0.4, colors.HexColor("#9AA9B8")),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("TOPPADDING", (0, 0), (-1, -1), 5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
         ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
     ]))
-    elements.append(stats_table)
-    elements.append(Spacer(1, 14))
+    return table
 
-    # ---- Quarterly forecast table ----
-    table_title = (f"Quarterly Forecast: {year_filter} Q1 &ndash; {year_filter} Q4"
-                    if year_filter else "Quarterly Forecast: 2026 Q1 &ndash; 2030 Q4")
-    elements.append(Paragraph(table_title, section_style))
 
-    header_row = ["Year", "Quarter", "SICA-only\n(cases)", "Hybrid Forecast\n(cases)"]
-    q_rows = [header_row]
-    for (yr, q), sica_val, hybrid_val in zip(labels, sica_vals, hybrid_vals):
-        q_rows.append([str(yr), f"Q{q}", f"{sica_val:.0f}", f"{hybrid_val:.0f}"])
+def build_forecast_pdf(future_results, last_real_year, last_real_quarter, last_real_value,
+                       year_filter: int = None) -> bytes:
+    """Return a thesis-appendix PDF for the full horizon or one selected year."""
+    styles = _paragraph_styles()
+    selected_rows = _selected_forecast_rows(future_results, year_filter)
+    horizon_text = (
+        f"{year_filter} Q1 – {year_filter} Q4 (4 quarters)"
+        if year_filter is not None else "2026 Q1 – 2030 Q4 (20 quarters)"
+    )
+    title_suffix = f" — {year_filter}" if year_filter is not None else ""
+    last_real_text = (
+        f"{int(last_real_year)} Q{int(last_real_quarter)} "
+        f"({int(last_real_value)} reported cases)"
+    )
 
-    q_table = Table(q_rows, colWidths=[3 * cm, 3 * cm, 5 * cm, 5.5 * cm], repeatRows=1)
-    q_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A5F")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F5F5F5")]),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
-    ]))
-    elements.append(q_table)
-    elements.append(Spacer(1, 14))
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4, topMargin=1.35 * cm, bottomMargin=1.35 * cm,
+        leftMargin=1.5 * cm, rightMargin=1.5 * cm,
+        title=f"HIV/AIDS Incidence Forecast Report{title_suffix}",
+        author="HIV Spread Prediction System",
+        subject="Thesis appendix forecast report",
+    )
+    elements = [
+        Paragraph(f"HIV/AIDS Incidence Forecast Report{title_suffix}", styles["title"]),
+        Paragraph("Hybrid SICA + Bi-LSTM Forecasting Model — Sri Lanka", styles["subtitle"]),
+        HRFlowable(width="100%", thickness=1, color=NAVY),
+        Spacer(1, 7),
+        _technical_specification(styles, horizon_text, last_real_text),
+        Spacer(1, 9),
+    ]
 
-    # ---- Annual totals table ----
-    totals_title = "Annual Total (Hybrid Model)" if year_filter else "Annual Forecast Totals (Hybrid Model)"
-    elements.append(Paragraph(totals_title, section_style))
+    elements.append(Paragraph("1. Methodology and mathematical formulation", styles["section"]))
+    elements.append(Paragraph(
+        "The SICA model partitions the population into Susceptible (S), Undiagnosed/Infected (I), "
+        "Chronic/ART (C), and AIDS-stage (A) compartments. Its calibrated compartmental ordinary "
+        "differential equations provide the mechanistic incidence baseline. The neural component is "
+        "trained on the discrepancy between observed incidence and that baseline.", styles["body"]
+    ))
+    equation_rows = [
+        [Paragraph("Quantity", styles["table_header"]), Paragraph("Definition", styles["table_header"])],
+        [Paragraph("Residual", styles["table_cell"]), Paragraph("E<sub>t</sub> = Y<sub>actual,t</sub> − Y<sub>SICA,t</sub>", styles["table_cell"])],
+        [Paragraph("Hybrid prediction", styles["table_cell"]), Paragraph("Ŷ<sub>t</sub> = Y<sub>SICA,t</sub> + Ê<sub>BiLSTM,t</sub>", styles["table_cell"])],
+        [Paragraph("Compounding uncertainty", styles["table_cell"]), Paragraph("SE(t) = σ<sub>e</sub> √[1 + α(t − 1)], where α = 0.05; 95% CI = Ŷ<sub>t</sub> ± 1.96 SE(t)", styles["table_cell"])],
+    ]
+    elements.append(_academic_table(equation_rows, [4.2 * cm, 12.3 * cm]))
+    elements.append(Spacer(1, 8))
+
+    elements.append(Paragraph("2. Quarterly forecast results", styles["section"]))
+    quarterly_rows = [[
+        Paragraph("Year", styles["table_header"]),
+        Paragraph("Quarter", styles["table_header"]),
+        Paragraph("SICA Baseline", styles["table_header"]),
+        Paragraph("Hybrid Forecast", styles["table_header"]),
+        Paragraph("95% CI (Lower – Upper)", styles["table_header"]),
+    ]]
+    for (year, quarter), sica, hybrid, lower, upper in selected_rows:
+        quarterly_rows.append([
+            Paragraph(str(int(year)), styles["table_cell"]),
+            Paragraph(f"Q{int(quarter)}", styles["table_cell"]),
+            Paragraph(f"{sica:.0f}", styles["table_cell"]),
+            Paragraph(f"{hybrid:.0f}", styles["table_cell"]),
+            Paragraph(f"{lower:.0f} – {upper:.0f}", styles["table_cell"]),
+        ])
+    elements.append(_academic_table(
+        quarterly_rows, [2.1 * cm, 2.1 * cm, 3.5 * cm, 3.7 * cm, 6.1 * cm]
+    ))
+    elements.append(Spacer(1, 8))
+
+    elements.append(Paragraph("3. Aggregated annual forecast totals", styles["section"]))
     annual = {}
-    for (yr, q), hybrid_val in zip(labels, hybrid_vals):
-        annual[yr] = annual.get(yr, 0) + hybrid_val
+    baseline_by_year = {}
+    for (year, _), sica, hybrid, lower, upper in selected_rows:
+        year = int(year)
+        baseline_by_year[year] = baseline_by_year.get(year, 0.0) + sica
+        totals = annual.setdefault(year, [0.0, 0.0, 0.0])
+        totals[0] += hybrid
+        totals[1] += lower
+        totals[2] += upper
+    annual_rows = [[
+        Paragraph("Year", styles["table_header"]),
+        Paragraph("SICA Baseline Total", styles["table_header"]),
+        Paragraph("Hybrid Forecast Total", styles["table_header"]),
+        Paragraph("95% CI (Lower – Upper)", styles["table_header"]),
+    ]]
+    for year, totals in annual.items():
+        annual_rows.append([
+            Paragraph(str(year), styles["table_cell"]),
+            Paragraph(f"{baseline_by_year[year]:.0f}", styles["table_cell"]),
+            Paragraph(f"{totals[0]:.0f}", styles["table_cell"]),
+            Paragraph(f"{totals[1]:.0f} – {totals[2]:.0f}", styles["table_cell"]),
+        ])
+    elements.append(_academic_table(
+        annual_rows, [2.5 * cm, 4.4 * cm, 4.6 * cm, 6.0 * cm]
+    ))
 
-    annual_rows = [["Year", "Forecasted New HIV Cases"]]
-    for yr, total in annual.items():
-        annual_rows.append([str(yr), f"{total:.0f}"])
-
-    annual_table = Table(annual_rows, colWidths=[8 * cm, 8.5 * cm])
-    annual_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E3A5F")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F5F5F5")]),
-        ("TOPPADDING", (0, 0), (-1, -1), 5),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ("FONTSIZE", (0, 0), (-1, -1), 10),
-    ]))
-    elements.append(annual_table)
-    elements.append(Spacer(1, 14))
-
-    # ---- Methodology / caveats note ----
+    elements.append(Paragraph("4. Validation summary", styles["section"]))
     elements.append(Paragraph(
-        "Methodology &amp; Limitations", section_style
+        "Chronological out-of-sample validation used a held-out 2024–2025 test window, with SICA "
+        "calibration and residual training performed using the training portion only. The reported "
+        "reference metrics are SICA MAPE = 26.90% and Hybrid MAPE = 7.00%. These values summarize "
+        "the model comparison used by the forecasting study and are presented as validation context, "
+        "not as a re-estimate from the future projection arrays in this report.", styles["body"]
+    ))
+
+    elements.append(Paragraph("5. Data citation, interpretation, and limitations", styles["section"]))
+    elements.append(Paragraph(
+        "Data source: National STD/AIDS Control Programme, Ministry of Health, Sri Lanka, quarterly "
+        "HIV surveillance reports covering 2008 Q1–2025 Q3. The source series represents reported "
+        "cases and should be interpreted in the context of testing coverage, reporting practices, "
+        "diagnostic delays, treatment access, and other surveillance-system changes. The exact source "
+        "report or data-file identifier should be added to the dissertation reference list alongside "
+        "the archived dataset used for model fitting.", styles["body"]
     ))
     elements.append(Paragraph(
-        "Forecasts are produced by a hybrid model: a SICA (Susceptible-Infectious-Chronic-AIDS) "
-        "compartmental model calibrated on 71 real quarterly data points (2008 Q1&ndash;2025 Q3) "
-        "supplies a mechanistic baseline trend, and a Bidirectional LSTM neural network, trained on "
-        "the residual between real data and this baseline, corrects for patterns the mechanistic "
-        "model cannot capture. On held-out real data (2024&ndash;2025), this hybrid approach achieved "
-        "a Mean Absolute Percentage Error of 7.00%, compared to 26.90% for the SICA model alone.",
-        styles["Normal"],
+        "The 2026–2030 values are model-based projections, not observed counts. Uncertainty increases "
+        "with forecast horizon because the residual model is rolled forward autoregressively. These "
+        "estimates are suitable for research interpretation and scenario planning, but must not be used "
+        "as the sole basis for clinical, funding, or public-health policy decisions without independent "
+        "epidemiological review and updated surveillance data.", styles["small"]
     ))
+    elements.append(Spacer(1, 5))
     elements.append(Paragraph(
-        "Future quarters (2026&ndash;2030) are generated by an autoregressive rollout: each "
-        "predicted quarter feeds into the input for the next. Forecast uncertainty increases with "
-        "horizon &mdash; near-term forecasts (2026) are more reliable than longer-term ones (2030). "
-        "These figures are model projections for research purposes and should not be used as the "
-        "sole basis for policy or clinical decisions without independent verification.",
-        note_style,
+        f"Report generated: {date.today().isoformat()} | Forecast horizon: {horizon_text}",
+        styles["small"],
     ))
 
     doc.build(elements)
@@ -190,25 +246,14 @@ def build_forecast_pdf(future_results, last_real_year, last_real_quarter, last_r
 
 
 if __name__ == "__main__":
-    # Smoke test: generate a full-horizon PDF and a single-year PDF
     from forecast_future import forecast_future
 
     results = forecast_future(n_future_quarters=20)
     last_row = results["df_historical"].iloc[-1]
-
-    pdf_bytes_full = build_forecast_pdf(
+    pdf_bytes = build_forecast_pdf(
         results,
         last_real_year=last_row["year"],
         last_real_quarter=last_row["quarter"],
         last_real_value=results["real_historical"][-1],
     )
-    print(f"Full-horizon PDF generated: {len(pdf_bytes_full)} bytes")
-
-    pdf_bytes_2027 = build_forecast_pdf(
-        results,
-        last_real_year=last_row["year"],
-        last_real_quarter=last_row["quarter"],
-        last_real_value=results["real_historical"][-1],
-        year_filter=2027,
-    )
-    print(f"Single-year (2027) PDF generated: {len(pdf_bytes_2027)} bytes")
+    print(f"Full-horizon PDF generated: {len(pdf_bytes)} bytes")

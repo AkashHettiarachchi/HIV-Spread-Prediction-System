@@ -7,6 +7,7 @@ import plotly.graph_objects as go
 
 from quarterly_data import get_quarterly_dataframe
 from calibration_quarterly import calibrate_quarterly, sica_quarterly_predictions
+from sica_model import SICAParams
 from hybrid_pipeline_quarterly import run as run_hybrid_pipeline
 from sidebar import render_sidebar
 
@@ -62,7 +63,10 @@ df = get_quarterly_dataframe()
 real_values = df["new_cases"].values.astype(float)
 
 with st.spinner("Calibrating SICA model and training Bi-LSTM on real quarterly data..."):
-    calibrated_params, y0, calib_result, _, _ = calibrate_quarterly()
+    n_test = 7
+    n_train = len(real_values) - n_test
+    train_values = real_values[:n_train]
+    calibrated_params, y0, calib_result, _, _ = calibrate_quarterly(train_values=train_values)
     sica_baseline_full = sica_quarterly_predictions(calibrated_params, y0, n_quarters=len(real_values))
     pipeline_results = run_hybrid_pipeline()
 
@@ -132,6 +136,127 @@ fig.update_layout(
     yaxis=dict(title="New HIV Cases per Quarter", gridcolor="#26302d", zeroline=False),
 )
 st.plotly_chart(fig, width='stretch')
+
+# ----------------- Mechanistic sensitivity and residual XAI -----------------
+with st.expander("🔬 Mechanistic Model Sensitivity & XAI Analysis", expanded=False):
+    st.markdown(
+        "Adjust the three calibrated SICA parameters to see how transmission, "
+        "diagnosis/linkage, and ART progression assumptions change the mechanistic "
+        "quarterly incidence trajectory. The other SICA parameters remain fixed at "
+        "their literature-informed defaults."
+    )
+
+    sensitivity_col1, sensitivity_col2, sensitivity_col3 = st.columns(3)
+    with sensitivity_col1:
+        sensitivity_beta = st.slider(
+            "β — transmission rate",
+            min_value=0.001,
+            max_value=2.0,
+            value=float(np.clip(calibrated_params.beta, 0.001, 2.0)),
+            step=0.001,
+            format="%.3f",
+            help="Effective transmission rate in the SICA force of infection.",
+        )
+    with sensitivity_col2:
+        sensitivity_rho = st.slider(
+            "ρ — diagnosis / ART linkage rate",
+            min_value=0.001,
+            max_value=0.99,
+            value=float(np.clip(calibrated_params.rho, 0.001, 0.99)),
+            step=0.001,
+            format="%.3f",
+            help="Rate at which undiagnosed people enter the chronic/ART compartment.",
+        )
+    with sensitivity_col3:
+        sensitivity_alpha = st.slider(
+            "α — ART failure / progression rate",
+            min_value=0.001,
+            max_value=0.99,
+            value=float(np.clip(calibrated_params.alpha, 0.001, 0.99)),
+            step=0.001,
+            format="%.3f",
+            help="Rate of progression from chronic/ART care to AIDS stage.",
+        )
+
+    sensitivity_params = SICAParams(
+        Lambda=calibrated_params.Lambda,
+        beta=sensitivity_beta,
+        eta=calibrated_params.eta,
+        mu=calibrated_params.mu,
+        phi=calibrated_params.phi,
+        rho=sensitivity_rho,
+        omega=calibrated_params.omega,
+        gamma=calibrated_params.gamma,
+        alpha=sensitivity_alpha,
+        delta=calibrated_params.delta,
+    )
+    interactive_sica = sica_quarterly_predictions(
+        sensitivity_params, y0, n_quarters=len(real_values)
+    )
+
+    sensitivity_fig = go.Figure()
+    sensitivity_fig.add_trace(go.Scatter(
+        x=quarters_x, y=real_values, mode="lines+markers",
+        name="Real NSACP data", line=dict(color="#8A99AD", width=1.5, dash="dash"),
+        marker=dict(size=5, color="#8A99AD"),
+    ))
+    sensitivity_fig.add_trace(go.Scatter(
+        x=quarters_x, y=sica_baseline_full, mode="lines",
+        name="Calibrated baseline", line=dict(color="#FFA500", width=2),
+    ))
+    sensitivity_fig.add_trace(go.Scatter(
+        x=quarters_x, y=interactive_sica, mode="lines",
+        name="Interactive simulation", line=dict(color="#00E676", width=2.5),
+    ))
+    sensitivity_fig.update_layout(
+        template="plotly_dark", paper_bgcolor="#111817", plot_bgcolor="#111817",
+        margin=dict(l=20, r=20, t=30, b=20), height=440, hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis=dict(title="Quarter", gridcolor="#26302d", tickangle=-45, zeroline=False),
+        yaxis=dict(title="New HIV Cases per Quarter", gridcolor="#26302d", zeroline=False),
+    )
+    st.plotly_chart(sensitivity_fig, width="stretch")
+
+    residuals = real_values - sica_baseline_full
+    residual_fig = go.Figure()
+    residual_fig.add_trace(go.Bar(
+        x=quarters_x, y=residuals, name="Residual Eₜ",
+        marker_color=np.where(residuals >= 0, "#00E676", "#FF6B6B"),
+        hovertemplate="%{x}<br>Residual: %{y:.1f} cases<extra></extra>",
+    ))
+    residual_fig.add_trace(go.Scatter(
+        x=quarters_x, y=np.zeros(len(residuals)), mode="lines", name="Zero error",
+        line=dict(color="#D5DED9", width=1),
+    ))
+    residual_fig.add_vrect(
+        x0="2020 Q1", x1="2021 Q4", fillcolor="#FF6B6B", opacity=0.12,
+        line_width=0, annotation_text="COVID-19 testing disruptions",
+        annotation_position="top left",
+    )
+    residual_fig.add_vrect(
+        x0="2022 Q2", x1="2025 Q3", fillcolor="#00E676", opacity=0.10,
+        line_width=0, annotation_text="Expanded MSM testing / accelerated detection",
+        annotation_position="bottom right",
+    )
+    residual_fig.update_layout(
+        template="plotly_dark", paper_bgcolor="#111817", plot_bgcolor="#111817",
+        margin=dict(l=20, r=20, t=55, b=20), height=420, hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis=dict(title="Quarter", gridcolor="#26302d", tickangle=-45, zeroline=False),
+        yaxis=dict(title="Residual: actual − SICA baseline (cases)", gridcolor="#26302d", zeroline=True),
+    )
+    st.plotly_chart(residual_fig, width="stretch")
+    st.markdown(
+        '<div class="insight"><strong>Why the Bi-LSTM residual correction is needed:</strong> '
+        "SICA encodes a smooth mechanistic transmission and care-flow process, but it does not "
+        "observe abrupt changes in testing access, reporting intensity, service disruption, or "
+        "case-finding strategy. Negative residuals during 2020 Q1–2021 Q4 are consistent with "
+        "COVID-19 testing disruptions and under-reporting, while the sustained positive shift from "
+        "2022 Q2–2025 Q3 is consistent with expanded MSM testing and accelerated detection. The "
+        "Bi-LSTM is trained on these residual dynamics so the hybrid model can correct the SICA "
+        "baseline when surveillance regimes change.</div>",
+        unsafe_allow_html=True,
+    )
 
 # ----------------- Test set table -----------------
 st.markdown('<div class="section-kicker">Validation window</div>', unsafe_allow_html=True)

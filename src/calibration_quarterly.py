@@ -17,6 +17,9 @@ from sica_model import SICAParams, simulate_sica
 from quarterly_data import get_quarterly_dataframe
 
 
+CALIBRATION_BOUNDS = ([0.001, 0.001, 0.001], [2.0, 0.99, 0.99])
+
+
 def initial_conditions_2008q1():
     """
     Approximate compartment split at 2008 Q1, using the PLHIV estimate
@@ -65,18 +68,27 @@ def residuals_fn(free_params, fixed: SICAParams, target_values, y0):
     return predicted - target_values
 
 
-def calibrate_quarterly():
+def calibrate_quarterly(train_values=None):
+    """Calibrate SICA against the full series by default, or against a supplied
+    training slice when a strict train-only fit is required.
+
+    Passing a train-only array keeps the app and validation pipeline leak-free,
+    while the production forecast script continues to use the full dataset.
+    """
     df = get_quarterly_dataframe()
-    target_values = df["new_cases"].values.astype(float)
+    if train_values is None:
+        target_values = df["new_cases"].values.astype(float)
+        used_values = target_values
+    else:
+        target_values = np.asarray(train_values, dtype=float)
+        used_values = target_values
 
     fixed = SICAParams()
     y0 = initial_conditions_2008q1()
 
     x0 = [fixed.beta, fixed.rho, fixed.alpha]
-    bounds = ([0.01, 0.01, 0.01], [1.0, 0.9, 0.9])
-
-    result = least_squares(residuals_fn, x0, bounds=bounds,
-                            args=(fixed, target_values, y0))
+    result = least_squares(residuals_fn, x0, bounds=CALIBRATION_BOUNDS,
+                            args=(fixed, used_values, y0))
 
     calibrated = SICAParams(
         Lambda=fixed.Lambda, beta=result.x[0], eta=fixed.eta, mu=fixed.mu,

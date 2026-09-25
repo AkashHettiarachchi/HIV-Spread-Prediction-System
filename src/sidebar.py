@@ -13,6 +13,7 @@ _PCA_URI = "data:image/png;base64," + base64.b64encode(_PCA_PATH.read_bytes()).d
 _NAV_ITEMS = [
     {"key": "overview", "page": "", "label": "Analytics overview"},
     {"key": "forecast", "page": "pages/2_Future_Forecast.py", "label": "Forecast horizon"},
+    {"key": "benchmark", "page": "pages/4_Model_Benchmark.py", "label": "Model benchmark"},
     {"key": "assistant", "page": "pages/3_AI_Assistant.py", "label": "AI knowledge assistant"},
 ]
 
@@ -33,6 +34,12 @@ _ACTIVE_ICON_SVG = {
         '<polyline points="12 5 19 12 12 19"></polyline>'
         '</svg>'
     ),
+    "benchmark": (
+        '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#72FF98" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+        '<path d="M4 18V8M10 18V4M16 18v-8M22 18V6"></path>'
+        '</svg>'
+    ),
     "assistant": (
         '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#72FF98" '
         'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
@@ -45,6 +52,7 @@ _ACTIVE_ICON_SVG = {
 _ENABLED_ICON = {
     "overview": ":material/analytics:",
     "forecast": ":material/arrow_forward:",
+    "benchmark": ":material/bar_chart:",
     "assistant": ":material/chat:",
 }
 
@@ -121,10 +129,12 @@ def render_sidebar(active_page: str) -> None:
     )
 
     st.markdown(
-        f'<div class="pca-chat-widget"><input class="pca-chat-toggle" id="pca-chat-toggle" type="checkbox"><label class="pca-chat-launcher" for="pca-chat-toggle"><img class="pca-chat-image" src="{_PCA_URI}" alt="Open Preditca AI assistant"><span class="pca-chat-label">Ask Preditca</span></label><div class="pca-chat-panel"><label class="pca-chat-close" for="pca-chat-toggle" aria-label="Close Preditca chatbot">&times;</label><div class="pca-chat-panel-title">Ask Preditca</div><div class="pca-chat-panel-copy">Explore HIV health knowledge, Sri Lanka surveillance context, and the forecasting model.</div><a href="/AI_Assistant" target="_self">Open AI assistant</a></div></div>',
+        f'<div class="pca-chat-widget"><input class="pca-chat-toggle" id="pca-chat-toggle" type="checkbox"><label class="pca-chat-launcher" for="pca-chat-toggle"><img class="pca-chat-image" src="{_PCA_URI}" alt="Open Preditca AI assistant"><span class="pca-chat-label">Ask Preditca</span></label><div class="pca-chat-panel"><label class="pca-chat-close" for="pca-chat-toggle" aria-label="Close Preditca chatbot">&times;</label><div class="pca-chat-panel-title">Ask Preditca</div><div class="pca-chat-panel-copy">Explore HIV health knowledge, Sri Lanka surveillance context, and the forecasting model.</div><a href="/AI_Assistant" target="_self">Open Preditca</a></div></div>',
         unsafe_allow_html=True,
     )
     components.html(
+
+
         """
         <script>
         (() => {

@@ -66,20 +66,18 @@ def run():
     df = get_quarterly_dataframe()
     real_values = df["new_cases"].values.astype(float)
 
-    # 1. SICA baseline calibrated on ALL data (mechanistic backbone;
-    #    calibrating this on train-only would be more rigorous for a
-    #    fully blind test -- noted as a refinement to make before
-    #    final submission, see README).
-    calibrated_params, y0, calib_result, _, _ = calibrate_quarterly()
+    n_test = TEST_QUARTERS
+    n_train_raw = len(real_values) - n_test
+    train_values = real_values[:n_train_raw]
+
+    # Strict train-only calibration: no leakage from the held-out test period.
+    calibrated_params, y0, calib_result, _, _ = calibrate_quarterly(train_values=train_values)
     sica_baseline = sica_quarterly_predictions(calibrated_params, y0, n_quarters=len(real_values))
 
     residual = real_values - sica_baseline
 
     # 2. Chronological train/test split BEFORE windowing, so no
     #    test-period information leaks into training sequences.
-    n_test = TEST_QUARTERS
-    n_train_raw = len(residual) - n_test
-
     train_residual_raw = residual[:n_train_raw]
     # include WINDOW_SIZE points of context before the test period so
     # the first test window has real lookback data (not synthetic)
